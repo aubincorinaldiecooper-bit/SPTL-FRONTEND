@@ -380,7 +380,7 @@ const MemoryUploader: React.FC = () => {
     try {
       setIsUploading(true);
       const formData = new FormData();
-      formData.append('photo', photoFile);
+      formData.append('image', photoFile);
       formData.append('caption', caption.trim());
       if (audioBlob) {
         formData.append('voice_note', audioBlob, 'voice-note.webm');
