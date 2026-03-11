@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useRef, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { cn } from '@/lib/utils';
 import { Button } from '@/components/ui/button';
 import { Textarea } from '@/components/ui/textarea';
@@ -36,8 +36,26 @@ interface Memory {
   photo: string;
   caption: string;
   audioURL: string | null;
+  spzUrl: string | null;
   username: string;
   profilePhoto: string | null;
+}
+
+interface FeedMemoryResponse {
+  id?: string | number;
+  photo?: string;
+  photo_url?: string;
+  caption?: string;
+  voice_note_url?: string | null;
+  audio_url?: string | null;
+  spz_url?: string | null;
+  username?: string;
+  user?: {
+    username?: string;
+    profile_photo_url?: string | null;
+  };
+  profile_photo?: string | null;
+  profile_photo_url?: string | null;
 }
 
 interface User {
@@ -150,9 +168,12 @@ const Toast: React.FC<{ message: string; onClose: () => void }> = ({ message, on
 };
 
 const MemoryUploader: React.FC = () => {
+  const API_BASE_URL = import.meta.env.VITE_API_URL ?? 'http://localhost:8000';
+
   const [photo, setPhoto] = useState<string | null>(null);
+  const [photoFile, setPhotoFile] = useState<File | null>(null);
   const [isRecording, setIsRecording] = useState(false);
-  const [_audioBlob, setAudioBlob] = useState<Blob | null>(null);
+  const [audioBlob, setAudioBlob] = useState<Blob | null>(null);
   const [audioURL, setAudioURL] = useState<string | null>(null);
   const [recordingTime, setRecordingTime] = useState(0);
   const [isPlaying, setIsPlaying] = useState(false);
@@ -161,7 +182,7 @@ const MemoryUploader: React.FC = () => {
   const [caption, setCaption] = useState('');
   const [currentStep, setCurrentStep] = useState(0);
   const [showPreview, setShowPreview] = useState(false);
-  const [fullViewPhoto, setFullViewPhoto] = useState<string | null>(null);
+  const [fullViewMedia, setFullViewMedia] = useState<{ photoUrl: string; spzUrl: string | null } | null>(null);
   const [currentView, setCurrentView] = useState<'feed' | 'profile' | 'search' | 'notifications' | 'upload' | 'userProfile' | 'editProfile'>('feed');
   const [profileTab, setProfileTab] = useState<'saved' | 'shared' | 'archive'>('saved');
   const [searchQuery, setSearchQuery] = useState('');
@@ -173,6 +194,9 @@ const MemoryUploader: React.FC = () => {
   const [editCaption, setEditCaption] = useState('');
   const [showPostMenu, setShowPostMenu] = useState<string | null>(null);
   const [toast, setToast] = useState<string | null>(null);
+  const [isLoadingFeed, setIsLoadingFeed] = useState(false);
+  const [isUploading, setIsUploading] = useState(false);
+  const [playingMemoryId, setPlayingMemoryId] = useState<string | null>(null);
   const [reportedPosts, setReportedPosts] = useState<Set<string>>(new Set());
   
   const [users, setUsers] = useState<User[]>([
@@ -181,24 +205,7 @@ const MemoryUploader: React.FC = () => {
     { id: '3', username: 'alex_runner', profilePhoto: null, isFriend: false, requestSent: false, bio: 'Running through life 🏃' },
   ]);
 
-  const [memories, setMemories] = useState<Memory[]>([
-    {
-      id: '1',
-      photo: 'https://images.unsplash.com/photo-1517841905240-472988babdf9?w=800&auto=format&fit=crop',
-      caption: 'Summer vibes 🌊',
-      audioURL: null,
-      username: 'sarah_travels',
-      profilePhoto: null
-    },
-    {
-      id: '2',
-      photo: 'https://images.unsplash.com/photo-1529626455594-4ff0802cfb7e?w=800&auto=format&fit=crop',
-      caption: 'Golden hour hits different',
-      audioURL: null,
-      username: 'photo_mike',
-      profilePhoto: null
-    }
-  ]);
+  const [memories, setMemories] = useState<Memory[]>([]);
 
   const [notifications, setNotifications] = useState<Notification[]>([
     { id: '1', type: 'shared', username: 'alex_runner', message: 'just added to "shared album"', time: '2m ago' },
@@ -211,14 +218,46 @@ const MemoryUploader: React.FC = () => {
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const recordingTimerRef = useRef<number | null>(null);
   const chunksRef = useRef<Blob[]>([]);
+  const feedAudioRef = useRef<HTMLAudioElement | null>(null);
 
   const showToast = (message: string) => {
     setToast(message);
   };
 
+  const mapMemoryFromApi = (item: FeedMemoryResponse): Memory => ({
+    id: String(item.id ?? Date.now()),
+    photo: item.photo_url ?? item.photo ?? '',
+    caption: item.caption ?? '',
+    audioURL: item.voice_note_url ?? item.audio_url ?? null,
+    spzUrl: item.spz_url ?? null,
+    username: item.username ?? item.user?.username ?? 'unknown_user',
+    profilePhoto: item.profile_photo_url ?? item.profile_photo ?? item.user?.profile_photo_url ?? null,
+  });
+
+  const loadFeed = async () => {
+    try {
+      setIsLoadingFeed(true);
+      const response = await fetch(`${API_BASE_URL}/api/feed`);
+      if (!response.ok) throw new Error(`Failed to load feed: ${response.status}`);
+      const data = await response.json();
+      const feedItems = Array.isArray(data) ? data : data?.results ?? data?.items ?? [];
+      setMemories(feedItems.map((item: FeedMemoryResponse) => mapMemoryFromApi(item)).filter((memory: Memory) => memory.photo));
+    } catch (error) {
+      console.error(error);
+      showToast('Could not load feed');
+    } finally {
+      setIsLoadingFeed(false);
+    }
+  };
+
+  useEffect(() => {
+    void loadFeed();
+  }, []);
+
   const handlePhotoUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (file && file.type.startsWith('image/')) {
+      setPhotoFile(file);
       const reader = new FileReader();
       reader.onload = (event) => {
         setPhoto(event.target?.result as string);
@@ -298,6 +337,26 @@ const MemoryUploader: React.FC = () => {
     }
   };
 
+
+  const toggleFeedAudio = (memoryId: string, audioUrl: string) => {
+    if (playingMemoryId === memoryId) {
+      feedAudioRef.current?.pause();
+      feedAudioRef.current = null;
+      setPlayingMemoryId(null);
+      return;
+    }
+
+    feedAudioRef.current?.pause();
+    const nextAudio = new Audio(audioUrl);
+    feedAudioRef.current = nextAudio;
+    setPlayingMemoryId(memoryId);
+    nextAudio.play().catch((error) => {
+      console.error('Failed to play voice note', error);
+      setPlayingMemoryId(null);
+    });
+    nextAudio.onended = () => setPlayingMemoryId(null);
+  };
+
   const handleTimeUpdate = () => {
     if (audioRef.current) {
       setCurrentTime(audioRef.current.currentTime);
@@ -315,24 +374,67 @@ const MemoryUploader: React.FC = () => {
     setCurrentTime(0);
   };
 
-  const handlePublish = () => {
-    if (photo && caption) {
-      const newMemory: Memory = {
-        id: Date.now().toString(),
-        photo,
-        caption,
-        audioURL,
-        username: myUsername,
-        profilePhoto: myProfilePhoto
-      };
-      setMemories([newMemory, ...memories]);
+  const handlePublish = async () => {
+    if (!photoFile || !caption.trim()) return;
+
+    try {
+      setIsUploading(true);
+      const formData = new FormData();
+      formData.append('photo', photoFile);
+      formData.append('caption', caption.trim());
+      if (audioBlob) {
+        formData.append('voice_note', audioBlob, 'voice-note.webm');
+      }
+
+      const uploadResponse = await fetch(`${API_BASE_URL}/api/spatial-photos`, {
+        method: 'POST',
+        body: formData,
+      });
+      if (!uploadResponse.ok) throw new Error(`Upload failed: ${uploadResponse.status}`);
+
+      const uploadData = await uploadResponse.json();
+      const jobId = uploadData?.job_id;
+      if (!jobId) throw new Error('Missing job ID from upload response');
+
+      let donePayload: Record<string, unknown> | null = null;
+      while (!donePayload) {
+        // eslint-disable-next-line no-await-in-loop
+        await new Promise((resolve) => setTimeout(resolve, 2000));
+        // eslint-disable-next-line no-await-in-loop
+        const statusResponse = await fetch(`${API_BASE_URL}/api/spatial-photos/${jobId}/status`);
+        if (!statusResponse.ok) throw new Error(`Status poll failed: ${statusResponse.status}`);
+        // eslint-disable-next-line no-await-in-loop
+        const statusData = await statusResponse.json();
+
+        if (statusData?.status === 'done') {
+          donePayload = statusData;
+        } else if (statusData?.status === 'failed') {
+          throw new Error('Spatial photo processing failed');
+        }
+      }
+
+      const createdRaw = (donePayload.spatial_photo as FeedMemoryResponse | undefined) ?? (donePayload.item as FeedMemoryResponse | undefined);
+      if (createdRaw) {
+        const createdMemory = mapMemoryFromApi(createdRaw);
+        setMemories((prev) => [createdMemory, ...prev.filter((memory) => memory.id !== createdMemory.id)]);
+      } else {
+        await loadFeed();
+      }
+
       setCurrentView('feed');
-      
       setPhoto(null);
+      setPhotoFile(null);
       setCaption('');
       setAudioURL(null);
+      setAudioBlob(null);
       setCurrentStep(0);
       setShowPreview(false);
+      showToast('Memory uploaded');
+    } catch (error) {
+      console.error(error);
+      showToast('Upload failed');
+    } finally {
+      setIsUploading(false);
     }
   };
 
@@ -379,18 +481,19 @@ const MemoryUploader: React.FC = () => {
   const goToUpload = () => {
     setCurrentView('upload');
     setPhoto(null);
+    setPhotoFile(null);
     setCaption('');
     setAudioURL(null);
     setCurrentStep(0);
     setShowPreview(false);
   };
 
-  const openFullView = (photoUrl: string) => {
-    setFullViewPhoto(photoUrl);
+  const openFullView = (photoUrl: string, spzUrl: string | null) => {
+    setFullViewMedia({ photoUrl, spzUrl });
   };
 
   const closeFullView = () => {
-    setFullViewPhoto(null);
+    setFullViewMedia(null);
   };
 
   const viewUserProfile = (username: string) => {
@@ -510,7 +613,7 @@ const MemoryUploader: React.FC = () => {
           
           <div className="flex items-center gap-2">
             <button
-              onClick={() => openFullView(memory.photo)}
+              onClick={() => openFullView(memory.photo, memory.spzUrl)}
               className="w-10 h-10 rounded-full bg-black/40 backdrop-blur-sm flex items-center justify-center text-white hover:bg-black/60 transition-colors"
             >
               <Rotate3DIcon className="w-5 h-5" />
@@ -609,10 +712,10 @@ const MemoryUploader: React.FC = () => {
 
               {memory.audioURL && (
                 <button
-                  onClick={togglePlayPause}
+                  onClick={() => toggleFeedAudio(memory.id, memory.audioURL!)}
                   className="flex items-center justify-center w-12 h-12 bg-black/60 hover:bg-black/70 backdrop-blur-sm rounded-full shrink-0"
                 >
-                  {isPlaying ? (
+                  {playingMemoryId === memory.id ? (
                     <Pause className="w-5 h-5 text-white" />
                   ) : (
                     <Play className="w-5 h-5 text-white ml-0.5" />
@@ -1004,7 +1107,7 @@ const MemoryUploader: React.FC = () => {
   );
 
   // Full View Modal
-  if (fullViewPhoto) {
+  if (fullViewMedia) {
     return (
       <div className="fixed inset-0 z-50 bg-black flex items-center justify-center">
         <button
@@ -1013,11 +1116,19 @@ const MemoryUploader: React.FC = () => {
         >
           <X className="w-5 h-5" />
         </button>
-        <img 
-          src={fullViewPhoto} 
-          alt="Full view" 
-          className="w-full h-full object-contain"
-        />
+        {fullViewMedia.spzUrl ? (
+          <iframe
+            src={fullViewMedia.spzUrl}
+            title="3D Spatial Viewer"
+            className="w-full h-full border-0"
+          />
+        ) : (
+          <img 
+            src={fullViewMedia.photoUrl} 
+            alt="Full view" 
+            className="w-full h-full object-contain"
+          />
+        )}
       </div>
     );
   }
@@ -1064,6 +1175,9 @@ const MemoryUploader: React.FC = () => {
         <Header />
 
         <div className="flex-1 overflow-y-scroll snap-y snap-mandatory scrollbar-hide">
+          {isLoadingFeed && (
+            <div className="p-6 text-center text-sm text-muted-foreground">Loading feed...</div>
+          )}
           {memories.filter(m => !reportedPosts.has(m.id)).map((memory) => (
             <div 
               key={memory.id}
@@ -1204,6 +1318,7 @@ const MemoryUploader: React.FC = () => {
                                   onClick={(e) => {
                                     e.stopPropagation();
                                     setPhoto(null);
+                                    setPhotoFile(null);
                                     if (fileInputRef.current) {
                                       fileInputRef.current.value = '';
                                     }
@@ -1473,10 +1588,11 @@ const MemoryUploader: React.FC = () => {
                     </Button>
                     <Button
                       onClick={handlePublish}
+                      disabled={isUploading}
                       className="flex-1 h-11"
                     >
                       <Send className="w-4 h-4 mr-2" />
-                      Upload
+                      {isUploading ? 'Uploading...' : 'Upload'}
                     </Button>
                   </div>
                 </div>
